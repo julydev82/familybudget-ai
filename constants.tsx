@@ -9,7 +9,3 @@ export const INITIAL_CATEGORIES: Category[] = [
   { id: '5', name: 'Otros', budget: 100, color: '#64748b', icon: '📦' },
 ];
 
-export const MOCK_USERS: FamilyUser[] = [
-  { id: 'u1', name: 'Adriana', avatar: 'https://picsum.photos/seed/ana/100' },
-  { id: 'u2', name: 'Julian', avatar: 'https://picsum.photos/seed/carlos/100' },
-];

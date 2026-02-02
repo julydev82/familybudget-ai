@@ -1,21 +1,23 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  onSnapshot, 
-  addDoc, 
-  updateDoc, 
+import {
+  onSnapshot,
+  addDoc,
+  updateDoc,
   deleteDoc,
-  doc, 
-  query, 
+  doc,
+  query,
   orderBy,
   setDoc
 } from "firebase/firestore";
-import { db, collections } from './firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { db, collections, auth } from './firebase';
 import { Category, Expense, FamilyUser, ViewType } from './types';
-import { INITIAL_CATEGORIES, MOCK_USERS } from './constants';
+import { INITIAL_CATEGORIES } from './constants';
 import DailyChart from './components/DailyChart';
 import QuickEntry from './components/QuickEntry';
 import CategoryDonutChart from './components/CategoryDonutChart';
+import Login from './components/Login';
 
 // Formateador de moneda profesional para Colombia (COP)
 const currencyFormatter = new Intl.NumberFormat('es-CO', {
@@ -29,10 +31,27 @@ const App: React.FC = () => {
   const [view, setView] = useState<ViewType>('dashboard');
   const [categories, setCategories] = useState<Category[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [currentUser, setCurrentUser] = useState<FamilyUser>(MOCK_USERS[0]);
+  const [currentUser, setCurrentUser] = useState<FamilyUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [isAddingCat, setIsAddingCat] = useState(false);
+
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setCurrentUser({
+          id: user.uid,
+          name: user.displayName || user.email?.split('@')[0] || 'Usuario',
+          avatar: user.photoURL || `https://ui-avatars.com/api/?name=${user.email}&background=random`
+        });
+      } else {
+        setCurrentUser(null);
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubAuth();
+  }, []);
 
   const currentMonthExpenses = useMemo(() => {
     const now = new Date();
@@ -55,6 +74,8 @@ const App: React.FC = () => {
   }, [categories, currentMonthExpenses]);
 
   useEffect(() => {
+    if (!currentUser) return;
+
     const unsubCats = onSnapshot(collections.categories, async (snapshot) => {
       if (snapshot.empty) {
         for (const cat of INITIAL_CATEGORIES) {
@@ -72,9 +93,10 @@ const App: React.FC = () => {
     });
 
     return () => { unsubCats(); unsubExps(); };
-  }, []);
+  }, [currentUser]);
 
   const handleAddExpense = async (data: any) => {
+    if (!currentUser) return;
     try {
       await addDoc(collections.expenses, {
         ...data,
@@ -101,10 +123,10 @@ const App: React.FC = () => {
         await updateDoc(doc(db, "categories", id), dataToUpdate);
       } else {
         const newId = Math.random().toString(36).substr(2, 9);
-        await setDoc(doc(db, "categories", newId), { 
-          ...catData, 
+        await setDoc(doc(db, "categories", newId), {
+          ...catData,
           id: newId,
-          color: catData.color || '#'+Math.floor(Math.random()*16777215).toString(16)
+          color: catData.color || '#' + Math.floor(Math.random() * 16777215).toString(16)
         });
       }
       setIsAddingCat(false);
@@ -118,6 +140,8 @@ const App: React.FC = () => {
   const totalSpent = useMemo(() => currentMonthExpenses.reduce((s, e) => s + (e.amount || 0), 0), [currentMonthExpenses]);
   const percentUsed = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
 
+  if (authLoading) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600 animate-pulse text-xl">Cargando...</div>;
+  if (!currentUser) return <Login />;
   if (loading) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600 animate-pulse text-xl">Cargando presupuesto...</div>;
 
   return (
@@ -132,12 +156,15 @@ const App: React.FC = () => {
           <NavItem active={view === 'categories'} onClick={() => setView('categories')} icon="⚙️" label="Configuración" />
           <NavItem active={view === 'expenses'} onClick={() => setView('expenses')} icon="💸" label="Historial" />
         </div>
-        <div className="mt-auto p-4 bg-slate-50 rounded-2xl flex items-center gap-3">
-          <img src={currentUser.avatar} className="w-8 h-8 rounded-full ring-2 ring-white" />
-          <div className="flex flex-col overflow-hidden">
-            <span className="text-xs text-slate-400 font-bold uppercase tracking-wider text-[9px]">Usuario</span>
-            <span className="text-sm font-bold truncate">{currentUser.name}</span>
+        <div className="mt-auto flex flex-col gap-4">
+          <div className="p-4 bg-slate-50 rounded-2xl flex items-center gap-3">
+            <img src={currentUser.avatar} className="w-8 h-8 rounded-full ring-2 ring-white" />
+            <div className="flex flex-col overflow-hidden">
+              <span className="text-xs text-slate-400 font-bold uppercase tracking-wider text-[9px]">Usuario</span>
+              <span className="text-sm font-bold truncate">{currentUser.name}</span>
+            </div>
           </div>
+          <button onClick={() => signOut(auth)} className="w-full py-2 text-sm font-bold text-red-500 hover:bg-red-50 rounded-xl transition-colors">Cerrar Sesión</button>
         </div>
       </nav>
 
@@ -148,7 +175,7 @@ const App: React.FC = () => {
               <h2 className="text-3xl font-bold text-slate-800">Este Mes 📅</h2>
               <p className="text-slate-500 font-medium">Consumo reiniciado para {new Date().toLocaleString('es-CO', { month: 'long' })}.</p>
             </header>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <StatCard title="Presupuesto" value={currencyFormatter.format(totalBudget)} icon="💰" color="bg-blue-50 text-blue-600" />
               <StatCard title="Gastado" value={currencyFormatter.format(totalSpent)} icon="📉" color="bg-rose-50 text-rose-600" />
@@ -156,7 +183,7 @@ const App: React.FC = () => {
             </div>
 
             <QuickEntry categories={categories} currentUser={currentUser} onAddExpense={handleAddExpense} />
-            
+
             <div className="flex flex-col gap-8">
               <DailyChart expenses={currentMonthExpenses} categories={categories} />
               <CategoryDonutChart data={categorySpendingData} />
@@ -182,9 +209,9 @@ const App: React.FC = () => {
                         </span>
                       </div>
                       <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full transition-all duration-1000 ease-out" 
-                          style={{ width: `${Math.min(100, perc)}%`, backgroundColor: perc > 100 ? '#ef4444' : cat.color }} 
+                        <div
+                          className="h-full transition-all duration-1000 ease-out"
+                          style={{ width: `${Math.min(100, perc)}%`, backgroundColor: perc > 100 ? '#ef4444' : cat.color }}
                         />
                       </div>
                     </div>
@@ -202,7 +229,7 @@ const App: React.FC = () => {
                 <h2 className="text-3xl font-bold">Configuración</h2>
                 <p className="text-slate-400">Administra tus metas mensuales.</p>
               </div>
-              <button 
+              <button
                 onClick={() => { setEditingCategory(null); setIsAddingCat(true); }}
                 className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-lg shadow-indigo-100"
               >
@@ -236,7 +263,7 @@ const App: React.FC = () => {
                     <input id="cat-budget" type="number" defaultValue={editingCategory?.budget || ''} placeholder="Presupuesto" className="w-full p-4 bg-slate-50 rounded-2xl border border-slate-100 focus:border-indigo-500 outline-none transition-all font-medium" />
                     <div className="flex gap-4 pt-6">
                       <button onClick={() => { setIsAddingCat(false); setEditingCategory(null); }} className="flex-1 py-4 font-bold text-slate-400">Cancelar</button>
-                      <button 
+                      <button
                         onClick={() => {
                           const name = (document.getElementById('cat-name') as HTMLInputElement).value;
                           const icon = (document.getElementById('cat-icon') as HTMLInputElement).value;
@@ -307,8 +334,8 @@ const App: React.FC = () => {
         <MobileNavItem active={view === 'dashboard'} onClick={() => setView('dashboard')} icon="📊" />
         <MobileNavItem active={view === 'categories'} onClick={() => setView('categories')} icon="⚙️" />
         <MobileNavItem active={view === 'expenses'} onClick={() => setView('expenses')} icon="💸" />
-        <button onClick={() => setCurrentUser(prev => prev.id === 'u1' ? MOCK_USERS[1] : MOCK_USERS[0])} className="p-1">
-          <img src={currentUser.avatar} className="w-8 h-8 rounded-full ring-2 ring-indigo-100" />
+        <button onClick={() => signOut(auth)} className="p-1 text-red-500">
+          🚪
         </button>
       </nav>
     </div>
