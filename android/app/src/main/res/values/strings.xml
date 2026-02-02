@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">FamilyBudget</string>
+    <string name="title_activity_main">FamilyBudget</string>
+    <string name="package_name">com.julydev82.familybudget</string>
+    <string name="custom_url_scheme">com.julydev82.familybudget</string>
+</resources>
