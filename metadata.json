@@ -1,0 +1,5 @@
+{
+  "name": "FamilyBudget AI",
+  "description": "A smart family budget manager with natural language expense entry, category-based budgeting, and daily consumption charts.",
+  "requestFramePermissions": []
+}
