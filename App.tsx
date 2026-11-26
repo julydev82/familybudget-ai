@@ -36,6 +36,7 @@ const App: React.FC = () => {
   const [authLoading, setAuthLoading] = useState(true);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [isAddingCat, setIsAddingCat] = useState(false);
+  const [accessError, setAccessError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (user) => {
@@ -48,6 +49,7 @@ const App: React.FC = () => {
       } else {
         setCurrentUser(null);
       }
+      setAccessError(null);
       setAuthLoading(false);
     });
     return () => unsubAuth();
@@ -76,6 +78,14 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser) return;
 
+    const onError = (err: { code?: string }) => {
+      console.error("Firestore error:", err);
+      setAccessError(err.code === 'permission-denied'
+        ? 'Tu cuenta no tiene acceso a este presupuesto. Pide que agreguen tu usuario como miembro.'
+        : 'No se pudieron cargar los datos. Verifica tu conexión.');
+      setLoading(false);
+    };
+
     const unsubCats = onSnapshot(collections.categories, async (snapshot) => {
       if (snapshot.empty) {
         for (const cat of INITIAL_CATEGORIES) {
@@ -84,13 +94,13 @@ const App: React.FC = () => {
       } else {
         setCategories(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Category)));
       }
-    });
+    }, onError);
 
     const q = query(collections.expenses, orderBy("date", "desc"));
     const unsubExps = onSnapshot(q, (snapshot) => {
       setExpenses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense)));
       setLoading(false);
-    });
+    }, onError);
 
     return () => { unsubCats(); unsubExps(); };
   }, [currentUser]);
@@ -142,6 +152,12 @@ const App: React.FC = () => {
 
   if (authLoading) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600 animate-pulse text-xl">Cargando...</div>;
   if (!currentUser) return <Login />;
+  if (accessError) return (
+    <div className="h-screen flex flex-col items-center justify-center gap-6 p-6 text-center">
+      <p className="font-bold text-slate-700 max-w-sm">⚠️ {accessError}</p>
+      <button onClick={() => signOut(auth)} className="px-6 py-3 font-bold text-red-500 hover:bg-red-50 rounded-xl">Cerrar Sesión</button>
+    </div>
+  );
   if (loading) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600 animate-pulse text-xl">Cargando presupuesto...</div>;
 
   return (

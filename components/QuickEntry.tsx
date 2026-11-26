@@ -31,7 +31,8 @@ const QuickEntry: React.FC<QuickEntryProps> = ({ categories, currentUser, onAddE
       if (result && result.amount) {
         let categoryId = categories[0].id;
         if (result.categoryName) {
-          const match = categories.find(c => c.name.toLowerCase().includes(result.categoryName.toLowerCase()));
+          const wanted = result.categoryName.toLowerCase();
+          const match = categories.find(c => c.name.toLowerCase() === wanted);
           if (match) categoryId = match.id;
         }
 
