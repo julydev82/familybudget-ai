@@ -19,5 +19,6 @@ export const auth = getAuth(app);
 
 export const collections = {
   expenses: collection(db, 'expenses'),
-  categories: collection(db, 'categories')
+  categories: collection(db, 'categories'),
+  incomes: collection(db, 'incomes')
 };
