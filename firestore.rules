@@ -1,0 +1,78 @@
+rules_version = '2';
+
+// Solo los usuarios registrados en la colección "members" pueden leer o
+// escribir. Para dar acceso, crea en la consola de Firebase un documento
+// members/{UID} (el UID aparece en Authentication > Users).
+// Nadie puede crear miembros desde la app.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isMember() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/members/$(request.auth.uid));
+    }
+
+    function validCategory(d) {
+      return d.keys().hasOnly(['id', 'name', 'budget', 'color', 'icon'])
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 50
+        && d.budget is number && d.budget >= 0
+        && d.color is string && d.icon is string;
+    }
+
+    function validExpense(d) {
+      return d.keys().hasOnly(['amount', 'description', 'categoryId', 'date', 'userId', 'userName', 'paymentMethod'])
+        && (!('paymentMethod' in d) || d.paymentMethod in ['salary', 'credit'])
+        && d.amount is number && d.amount > 0
+        && d.description is string && d.description.size() <= 200
+        && d.categoryId is string
+        && d.date is string
+        && d.userName is string;
+    }
+
+    function validIncome(d) {
+      return d.keys().hasOnly(['amount', 'description', 'period', 'createdAt', 'userId', 'userName'])
+        && d.amount is number && d.amount > 0
+        && d.description is string && d.description.size() <= 100
+        && d.period is string && d.period.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
+        && d.createdAt is string
+        && d.userName is string;
+    }
+
+    match /incomes/{incomeId} {
+      allow read: if isMember();
+      allow create: if isMember()
+        && validIncome(request.resource.data)
+        && request.resource.data.userId == request.auth.uid;
+      allow delete: if isMember();
+    }
+
+    match /members/{uid} {
+      allow read: if isMember();
+      allow write: if false;
+    }
+
+    match /categories/{catId} {
+      allow read: if isMember();
+      allow create, update: if isMember() && validCategory(request.resource.data);
+      allow delete: if isMember();
+    }
+
+    match /expenses/{expId} {
+      allow read: if isMember();
+      // Cada quien registra gastos a su propio nombre.
+      allow create: if isMember()
+        && validExpense(request.resource.data)
+        && request.resource.data.userId == request.auth.uid;
+      // Ambos miembros pueden corregir o borrar, sin cambiar el autor.
+      allow update: if isMember()
+        && validExpense(request.resource.data)
+        && request.resource.data.userId == resource.data.userId;
+      allow delete: if isMember();
+    }
+
+    // Todo lo demás queda cerrado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
