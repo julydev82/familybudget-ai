@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { createUserWithEmailAndPassword, sendEmailVerification, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { auth } from '../firebase';
 
 const inputClass = "w-full p-4 bg-slate-50 rounded-2xl border border-slate-100 focus:border-indigo-500 outline-none transition-all font-medium";
@@ -51,6 +51,11 @@ const Login: React.FC = () => {
             } else {
                 const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
                 await updateProfile(cred.user, { displayName: name.trim() });
+                try {
+                    await sendEmailVerification(cred.user);
+                } catch (err) {
+                    console.warn('No se pudo enviar el correo de verificación:', err);
+                }
                 // Refresca el token para que la app reciba el nombre recién asignado.
                 await cred.user.getIdToken(true);
             }
@@ -128,7 +133,7 @@ const Login: React.FC = () => {
 
                 {isSignup && (
                     <p className="mt-6 text-xs text-slate-400 text-center">
-                        Tu cuenta tendrá sus propios gastos, ingresos y categorías. Nadie más podrá verlos.
+                        Te enviaremos un correo para confirmar tu cuenta. Tendrá sus propios gastos, ingresos y categorías; nadie más podrá verlos.
                     </p>
                 )}
             </div>

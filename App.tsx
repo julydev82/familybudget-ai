@@ -13,7 +13,8 @@ import {
 } from "firebase/firestore";
 import { onIdTokenChanged, signOut } from 'firebase/auth';
 import { auth, householdRefs, HouseholdId } from './firebase';
-import { resolveHousehold, syncCategoryTemplate } from './services/household';
+import { NEEDS_VERIFICATION, resolveHousehold, syncCategoryTemplate } from './services/household';
+import VerifyEmail from './components/VerifyEmail';
 import { Category, Expense, FamilyUser, Income, PaymentMethod, ViewType } from './types';
 import { activePeriodFrom, addMonths, currentPeriod, expenseDateFor, isInPeriod, periodLabel, periodStart } from './utils/period';
 import { INITIAL_CATEGORIES } from './constants';
@@ -48,7 +49,9 @@ const App: React.FC = () => {
   const [accessError, setAccessError] = useState<string | null>(null);
   // Hogar del usuario: undefined mientras se determina, null = hogar familiar original.
   const [householdId, setHouseholdId] = useState<HouseholdId | undefined>(undefined);
-  const resolvedUid = useRef<string | null>(null);
+  const [needsVerification, setNeedsVerification] = useState(false);
+  // Clave uid + estado de verificación: se vuelve a resolver al verificar el correo.
+  const resolvedKey = useRef<string | null>(null);
 
   useEffect(() => {
     // onIdTokenChanged (y no onAuthStateChanged) para recibir también el nombre
@@ -60,24 +63,31 @@ const App: React.FC = () => {
           name: user.displayName || user.email?.split('@')[0] || 'Usuario',
           avatar: user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || user.email || '')}&background=random`
         });
-        if (resolvedUid.current !== user.uid) {
-          resolvedUid.current = user.uid;
+        const key = `${user.uid}|${user.emailVerified}`;
+        if (resolvedKey.current !== key) {
+          resolvedKey.current = key;
           setHouseholdId(undefined);
+          setNeedsVerification(false);
           setAccessError(null);
           resolveHousehold(user)
-            .then(id => { if (resolvedUid.current === user.uid) setHouseholdId(id); })
+            .then(id => {
+              if (resolvedKey.current !== key) return;
+              if (id === NEEDS_VERIFICATION) setNeedsVerification(true);
+              else setHouseholdId(id);
+            })
             .catch(err => {
               console.error("Error resolving household:", err);
-              if (resolvedUid.current === user.uid) {
+              if (resolvedKey.current === key) {
                 const code = (err as { code?: string })?.code || (err as Error)?.message || 'desconocido';
                 setAccessError(`No se pudo preparar tu cuenta (${code}). Cierra sesión y vuelve a entrar para reintentar.`);
               }
             });
         }
       } else {
-        resolvedUid.current = null;
+        resolvedKey.current = null;
         setCurrentUser(null);
         setHouseholdId(undefined);
+        setNeedsVerification(false);
         setAccessError(null);
       }
       setAuthLoading(false);
@@ -269,6 +279,7 @@ const App: React.FC = () => {
       <button onClick={() => signOut(auth)} className="px-6 py-3 font-bold text-red-500 hover:bg-red-50 rounded-xl">Cerrar Sesión</button>
     </div>
   );
+  if (needsVerification) return <VerifyEmail />;
   if (householdId === undefined) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600 animate-pulse text-xl">Preparando tu cuenta...</div>;
   if (loading) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600 animate-pulse text-xl">Cargando presupuesto...</div>;
 

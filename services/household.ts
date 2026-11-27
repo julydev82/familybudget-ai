@@ -24,13 +24,16 @@ const cleanCategory = (c: Partial<Category>): Category | null => {
 const cleanList = (list: Partial<Category>[]) =>
   list.map(cleanCategory).filter((c): c is Category => c !== null).sort((a, b) => a.id.localeCompare(b.id));
 
+/** La cuenta nueva aún no confirma su correo: no puede crear su hogar. */
+export const NEEDS_VERIFICATION = 'needs-verification' as const;
+
 /**
  * Determina el hogar del usuario. Si es una cuenta nueva, le crea su propio
  * hogar y clona la plantilla de categorías. Es idempotente: si un intento
  * anterior quedó a medias, lo completa.
  * Devuelve null para el hogar familiar original (colecciones en la raíz).
  */
-export const resolveHousehold = async (user: User): Promise<HouseholdId> => {
+export const resolveHousehold = async (user: User): Promise<HouseholdId | typeof NEEDS_VERIFICATION> => {
   const memberRef = doc(db, 'members', user.uid);
   const member = await getDoc(memberRef);
   const now = new Date().toISOString();
@@ -38,9 +41,12 @@ export const resolveHousehold = async (user: User): Promise<HouseholdId> => {
   let householdId: string;
   if (member.exists()) {
     const existing = member.data().householdId as string | undefined;
-    if (!existing) return null; // hogar familiar original
+    if (!existing) return null; // hogar familiar original (no requiere verificación)
+    if (!user.emailVerified) return NEEDS_VERIFICATION;
     householdId = existing;
   } else {
+    // Protección contra registros masivos: sin correo verificado no se crea nada.
+    if (!user.emailVerified) return NEEDS_VERIFICATION;
     // Cuenta nueva: su hogar usa su propio UID como identificador.
     householdId = user.uid;
     await setDoc(memberRef, { householdId, email: user.email ?? '', createdAt: now });

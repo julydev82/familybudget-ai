@@ -22,9 +22,15 @@ service cloud.firestore {
       return hasMember() && !('householdId' in get(memberPath()).data);
     }
 
-    // Miembro de un hogar nuevo.
+    // Correo confirmado: protege contra registros masivos con bots. Las
+    // cuentas nuevas no pueden crear ni usar un hogar sin verificar su correo.
+    function verified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    // Miembro (verificado) de un hogar nuevo.
     function inHousehold(hid) {
-      return hasMember() && get(memberPath()).data.get('householdId', null) == hid;
+      return verified() && hasMember() && get(memberPath()).data.get('householdId', null) == hid;
     }
 
     function validCategory(d) {
@@ -65,7 +71,7 @@ service cloud.firestore {
       allow read: if request.auth != null && request.auth.uid == uid;
       // Una cuenta nueva solo puede crear su propio registro, apuntando a su
       // propio hogar: no puede unirse al hogar de otra persona.
-      allow create: if request.auth != null && request.auth.uid == uid
+      allow create: if verified() && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['householdId', 'email', 'createdAt'])
         && request.resource.data.householdId == uid;
       allow update, delete: if false;
@@ -73,7 +79,7 @@ service cloud.firestore {
 
     match /households/{hid} {
       allow read: if inHousehold(hid);
-      allow create: if request.auth != null && request.auth.uid == hid
+      allow create: if verified() && request.auth.uid == hid
         && request.resource.data.keys().hasOnly(['ownerId', 'createdAt'])
         && request.resource.data.ownerId == request.auth.uid;
       allow update, delete: if false;
@@ -107,7 +113,7 @@ service cloud.firestore {
     // Plantilla de categorías para cuentas nuevas: la publica el hogar
     // familiar y la puede leer cualquier cuenta registrada.
     match /config/categoryTemplate {
-      allow read: if request.auth != null;
+      allow read: if verified() || isMember();
       allow write: if isMember()
         && request.resource.data.keys().hasOnly(['categories', 'updatedAt'])
         && request.resource.data.categories is list
