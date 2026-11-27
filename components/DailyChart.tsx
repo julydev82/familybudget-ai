@@ -4,6 +4,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine 
 } from 'recharts';
 import { Expense, Category } from '../types';
+import { currentPeriod, periodStart } from '../utils/period';
 
 const currencyShort = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -14,12 +15,20 @@ const currencyShort = new Intl.NumberFormat('es-CO', {
 interface DailyChartProps {
   expenses: Expense[];
   categories: Category[];
+  period: string;
 }
 
-const DailyChart: React.FC<DailyChartProps> = ({ expenses, categories }) => {
+const DailyChart: React.FC<DailyChartProps> = ({ expenses, categories, period }) => {
   const chartData = useMemo(() => {
     const today = new Date();
-    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const start = periodStart(period);
+    const year = start.getFullYear();
+    const month = start.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    // Último día con datos: hoy en el mes en curso, todo el mes en meses pasados,
+    // y el día 1 en un periodo adelantado (los gastos quedan con esa fecha).
+    const now = currentPeriod();
+    const lastDay = period === now ? today.getDate() : period < now ? daysInMonth : 1;
     const totalBudget = categories.reduce((sum, c) => sum + c.budget, 0);
     const dailyIdeal = totalBudget / daysInMonth;
 
@@ -27,8 +36,8 @@ const DailyChart: React.FC<DailyChartProps> = ({ expenses, categories }) => {
     let cumulativeSpending = 0;
 
     return days.map(day => {
-      const dayStart = new Date(today.getFullYear(), today.getMonth(), day);
-      const dayEnd = new Date(today.getFullYear(), today.getMonth(), day + 1);
+      const dayStart = new Date(year, month, day);
+      const dayEnd = new Date(year, month, day + 1);
       
       const daySpending = expenses
         .filter(e => {
@@ -38,7 +47,7 @@ const DailyChart: React.FC<DailyChartProps> = ({ expenses, categories }) => {
         .reduce((sum, e) => sum + e.amount, 0);
       
       cumulativeSpending += daySpending;
-      const isPastOrToday = day <= today.getDate();
+      const isPastOrToday = day <= lastDay;
 
       return {
         day: `${day}`,
@@ -47,7 +56,7 @@ const DailyChart: React.FC<DailyChartProps> = ({ expenses, categories }) => {
         presupuesto: totalBudget
       };
     });
-  }, [expenses, categories]);
+  }, [expenses, categories, period]);
 
   return (
     <div className="h-80 w-full bg-white p-6 rounded-3xl shadow-sm border border-slate-100">

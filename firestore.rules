@@ -20,12 +20,30 @@ service cloud.firestore {
     }
 
     function validExpense(d) {
-      return d.keys().hasOnly(['amount', 'description', 'categoryId', 'date', 'userId', 'userName'])
+      return d.keys().hasOnly(['amount', 'description', 'categoryId', 'date', 'userId', 'userName', 'paymentMethod'])
+        && (!('paymentMethod' in d) || d.paymentMethod in ['salary', 'credit'])
         && d.amount is number && d.amount > 0
         && d.description is string && d.description.size() <= 200
         && d.categoryId is string
         && d.date is string
         && d.userName is string;
+    }
+
+    function validIncome(d) {
+      return d.keys().hasOnly(['amount', 'description', 'period', 'createdAt', 'userId', 'userName'])
+        && d.amount is number && d.amount > 0
+        && d.description is string && d.description.size() <= 100
+        && d.period is string && d.period.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
+        && d.createdAt is string
+        && d.userName is string;
+    }
+
+    match /incomes/{incomeId} {
+      allow read: if isMember();
+      allow create: if isMember()
+        && validIncome(request.resource.data)
+        && request.resource.data.userId == request.auth.uid;
+      allow delete: if isMember();
     }
 
     match /members/{uid} {
