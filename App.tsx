@@ -1,18 +1,19 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   onSnapshot,
+  QuerySnapshot,
   addDoc,
   updateDoc,
   deleteDoc,
-  doc,
   query,
   orderBy,
   setDoc,
   where
 } from "firebase/firestore";
-import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { db, collections, auth } from './firebase';
+import { onIdTokenChanged, signOut } from 'firebase/auth';
+import { auth, householdRefs, HouseholdId } from './firebase';
+import { resolveHousehold, syncCategoryTemplate } from './services/household';
 import { Category, Expense, FamilyUser, Income, PaymentMethod, ViewType } from './types';
 import { activePeriodFrom, addMonths, currentPeriod, expenseDateFor, isInPeriod, periodLabel, periodStart } from './utils/period';
 import { INITIAL_CATEGORIES } from './constants';
@@ -45,23 +46,46 @@ const App: React.FC = () => {
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [isAddingCat, setIsAddingCat] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
+  // Hogar del usuario: undefined mientras se determina, null = hogar familiar original.
+  const [householdId, setHouseholdId] = useState<HouseholdId | undefined>(undefined);
+  const resolvedUid = useRef<string | null>(null);
 
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
+    // onIdTokenChanged (y no onAuthStateChanged) para recibir también el nombre
+    // que se asigna justo después de registrarse.
+    const unsubAuth = onIdTokenChanged(auth, (user) => {
       if (user) {
         setCurrentUser({
           id: user.uid,
           name: user.displayName || user.email?.split('@')[0] || 'Usuario',
-          avatar: user.photoURL || `https://ui-avatars.com/api/?name=${user.email}&background=random`
+          avatar: user.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || user.email || '')}&background=random`
         });
+        if (resolvedUid.current !== user.uid) {
+          resolvedUid.current = user.uid;
+          setHouseholdId(undefined);
+          setAccessError(null);
+          resolveHousehold(user)
+            .then(id => { if (resolvedUid.current === user.uid) setHouseholdId(id); })
+            .catch(err => {
+              console.error("Error resolving household:", err);
+              if (resolvedUid.current === user.uid) {
+                const code = (err as { code?: string })?.code || (err as Error)?.message || 'desconocido';
+                setAccessError(`No se pudo preparar tu cuenta (${code}). Cierra sesión y vuelve a entrar para reintentar.`);
+              }
+            });
+        }
       } else {
+        resolvedUid.current = null;
         setCurrentUser(null);
+        setHouseholdId(undefined);
+        setAccessError(null);
       }
-      setAccessError(null);
       setAuthLoading(false);
     });
     return () => unsubAuth();
   }, []);
+
+  const refs = useMemo(() => (householdId === undefined ? null : householdRefs(householdId)), [householdId]);
 
   // Periodo activo: mes actual, o el mes del último sueldo si es adelantado.
   const activePeriod = useMemo(() => activePeriodFrom(incomes.map(i => i.period)), [incomes]);
@@ -99,45 +123,56 @@ const App: React.FC = () => {
   }, [categories, periodExpenses]);
 
   useEffect(() => {
-    if (!currentUser) return;
+    // Limpia los datos del usuario anterior para no mostrarlos a otra cuenta.
+    setCategories([]);
+    setExpenses([]);
+    setIncomes([]);
+    setSelectedPeriod(null);
+    setLoading(true);
+    if (!refs) return;
 
     const onError = (err: { code?: string }) => {
       console.error("Firestore error:", err);
       setAccessError(err.code === 'permission-denied'
-        ? 'Tu cuenta no tiene acceso a este presupuesto. Pide que agreguen tu usuario como miembro.'
+        ? 'Tu cuenta no tiene acceso a estos datos.'
         : 'No se pudieron cargar los datos. Verifica tu conexión.');
       setLoading(false);
     };
 
-    const unsubCats = onSnapshot(collections.categories, async (snapshot) => {
+    const unsubCats = onSnapshot(refs.categories, async (snapshot: QuerySnapshot) => {
       if (snapshot.empty) {
         for (const cat of INITIAL_CATEGORIES) {
-          await setDoc(doc(db, "categories", cat.id), cat);
+          await setDoc(refs.doc('categories', cat.id), cat);
         }
       } else {
-        setCategories(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Category)));
+        const cats = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Category));
+        setCategories(cats);
+        // El hogar familiar publica sus categorías como plantilla para cuentas nuevas.
+        if (householdId === null) {
+          syncCategoryTemplate(cats).catch(err => console.warn("No se pudo actualizar la plantilla:", err));
+        }
       }
     }, onError);
 
     // Solo se descargan los gastos desde hace 5 meses (lo que usan el dashboard
     // y el análisis de 6 meses), no todo el histórico.
     const since = periodStart(addMonths(currentPeriod(), -HISTORY_MONTHS)).toISOString();
-    const q = query(collections.expenses, where("date", ">=", since), orderBy("date", "desc"));
-    const unsubExps = onSnapshot(q, (snapshot) => {
+    const q = query(refs.expenses, where("date", ">=", since), orderBy("date", "desc"));
+    const unsubExps = onSnapshot(q, (snapshot: QuerySnapshot) => {
       setExpenses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense)));
       setLoading(false);
     }, onError);
 
-    const unsubIncomes = onSnapshot(query(collections.incomes, orderBy("period", "desc")), (snapshot) => {
+    const unsubIncomes = onSnapshot(query(refs.incomes, orderBy("period", "desc")), (snapshot: QuerySnapshot) => {
       setIncomes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Income)));
     }, onError);
 
     return () => { unsubCats(); unsubExps(); unsubIncomes(); };
-  }, [currentUser]);
+  }, [refs, householdId]);
 
   const handleAddExpense = async (data: { amount: number; description: string; categoryId: string; paymentMethod: PaymentMethod }) => {
-    if (!currentUser) return;
-    await addDoc(collections.expenses, {
+    if (!currentUser || !refs) return;
+    await addDoc(refs.expenses, {
       ...data,
       // Si ya se recibió el sueldo de un mes futuro, el gasto queda el día 1 de ese mes.
       date: expenseDateFor(activePeriod).toISOString(),
@@ -147,8 +182,8 @@ const App: React.FC = () => {
   };
 
   const handleAddIncome = async (data: { amount: number; description: string; period: string }) => {
-    if (!currentUser) return;
-    await addDoc(collections.incomes, {
+    if (!currentUser || !refs) return;
+    await addDoc(refs.incomes, {
       ...data,
       createdAt: new Date().toISOString(),
       userId: currentUser.id,
@@ -159,7 +194,7 @@ const App: React.FC = () => {
 
   const handleApplyBudget = async (category: Category, budget: number) => {
     try {
-      await updateDoc(doc(db, "categories", category.id), { budget });
+      await updateDoc(refs!.doc('categories', category.id), { budget });
     } catch (err) {
       console.error("Error updating budget:", err);
       alert('No se pudo actualizar el presupuesto.');
@@ -169,7 +204,7 @@ const App: React.FC = () => {
   const handleDeleteExpense = async (expense: Expense) => {
     if (!confirm(`¿Eliminar el gasto "${expense.description}" por ${currencyFormatter.format(expense.amount)}?`)) return;
     try {
-      await deleteDoc(doc(db, "expenses", expense.id));
+      await deleteDoc(refs!.doc('expenses', expense.id));
     } catch (err) {
       console.error("Error deleting expense:", err);
       alert('No se pudo eliminar el gasto.');
@@ -179,7 +214,7 @@ const App: React.FC = () => {
   const handleDeleteIncome = async (income: Income) => {
     if (!confirm(`¿Eliminar el ingreso "${income.description}" de ${periodLabel(income.period)}?`)) return;
     try {
-      await deleteDoc(doc(db, "incomes", income.id));
+      await deleteDoc(refs!.doc('incomes', income.id));
     } catch (err) {
       console.error("Error deleting income:", err);
     }
@@ -189,17 +224,17 @@ const App: React.FC = () => {
     try {
       if (isDelete && catData.id) {
         if (confirm(`¿Eliminar la categoría "${catData.name}"?`)) {
-          await deleteDoc(doc(db, "categories", catData.id));
+          await deleteDoc(refs!.doc('categories', catData.id));
         }
         return;
       }
 
       if (catData.id) {
         const { id, ...dataToUpdate } = catData as Category;
-        await updateDoc(doc(db, "categories", id), dataToUpdate);
+        await updateDoc(refs!.doc('categories', id), dataToUpdate);
       } else {
         const newId = Math.random().toString(36).substr(2, 9);
-        await setDoc(doc(db, "categories", newId), {
+        await setDoc(refs!.doc('categories', newId), {
           ...catData,
           id: newId,
           color: catData.color || '#' + Math.floor(Math.random() * 16777215).toString(16)
@@ -234,6 +269,7 @@ const App: React.FC = () => {
       <button onClick={() => signOut(auth)} className="px-6 py-3 font-bold text-red-500 hover:bg-red-50 rounded-xl">Cerrar Sesión</button>
     </div>
   );
+  if (householdId === undefined) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600 animate-pulse text-xl">Preparando tu cuenta...</div>;
   if (loading) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600 animate-pulse text-xl">Cargando presupuesto...</div>;
 
   return (
