@@ -16,6 +16,8 @@ const firebaseConfig = {
 export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+// Correos de Firebase Auth (verificación, etc.) en español.
+auth.languageCode = 'es';
 
 /**
  * Cada usuario trabaja dentro de un "hogar" con sus propias colecciones.
