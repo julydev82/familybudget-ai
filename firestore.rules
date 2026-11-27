@@ -1,15 +1,30 @@
 rules_version = '2';
 
-// Solo los usuarios registrados en la colección "members" pueden leer o
-// escribir. Para dar acceso, crea en la consola de Firebase un documento
-// members/{UID} (el UID aparece en Authentication > Users).
-// Nadie puede crear miembros desde la app.
+// Cada usuario pertenece a un "hogar" (members/{UID}):
+//  - Hogar familiar original: members/{UID} SIN campo householdId (creados a
+//    mano en la consola). Sus datos están en las colecciones de la raíz.
+//  - Hogares nuevos: members/{UID}.householdId == UID, creado por la propia
+//    cuenta al registrarse. Sus datos están en households/{UID}/...
+// Ningún hogar puede leer ni escribir los datos de otro.
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function memberPath() {
+      return /databases/$(database)/documents/members/$(request.auth.uid);
+    }
+
+    function hasMember() {
+      return request.auth != null && exists(memberPath());
+    }
+
+    // Miembro del hogar familiar original (colecciones de la raíz).
     function isMember() {
-      return request.auth != null
-        && exists(/databases/$(database)/documents/members/$(request.auth.uid));
+      return hasMember() && !('householdId' in get(memberPath()).data);
+    }
+
+    // Miembro de un hogar nuevo.
+    function inHousehold(hid) {
+      return hasMember() && get(memberPath()).data.get('householdId', null) == hid;
     }
 
     function validCategory(d) {
@@ -47,8 +62,56 @@ service cloud.firestore {
     }
 
     match /members/{uid} {
-      allow read: if isMember();
-      allow write: if false;
+      allow read: if request.auth != null && request.auth.uid == uid;
+      // Una cuenta nueva solo puede crear su propio registro, apuntando a su
+      // propio hogar: no puede unirse al hogar de otra persona.
+      allow create: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['householdId', 'email', 'createdAt'])
+        && request.resource.data.householdId == uid;
+      allow update, delete: if false;
+    }
+
+    match /households/{hid} {
+      allow read: if inHousehold(hid);
+      allow create: if request.auth != null && request.auth.uid == hid
+        && request.resource.data.keys().hasOnly(['ownerId', 'createdAt'])
+        && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if false;
+
+      match /categories/{catId} {
+        allow read: if inHousehold(hid);
+        allow create, update: if inHousehold(hid) && validCategory(request.resource.data);
+        allow delete: if inHousehold(hid);
+      }
+
+      match /expenses/{expId} {
+        allow read: if inHousehold(hid);
+        allow create: if inHousehold(hid)
+          && validExpense(request.resource.data)
+          && request.resource.data.userId == request.auth.uid;
+        allow update: if inHousehold(hid)
+          && validExpense(request.resource.data)
+          && request.resource.data.userId == resource.data.userId;
+        allow delete: if inHousehold(hid);
+      }
+
+      match /incomes/{incomeId} {
+        allow read: if inHousehold(hid);
+        allow create: if inHousehold(hid)
+          && validIncome(request.resource.data)
+          && request.resource.data.userId == request.auth.uid;
+        allow delete: if inHousehold(hid);
+      }
+    }
+
+    // Plantilla de categorías para cuentas nuevas: la publica el hogar
+    // familiar y la puede leer cualquier cuenta registrada.
+    match /config/categoryTemplate {
+      allow read: if request.auth != null;
+      allow write: if isMember()
+        && request.resource.data.keys().hasOnly(['categories', 'updatedAt'])
+        && request.resource.data.categories is list
+        && request.resource.data.categories.size() <= 50;
     }
 
     match /categories/{catId} {
